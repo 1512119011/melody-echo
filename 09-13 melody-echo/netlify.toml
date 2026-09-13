@@ -10,6 +10,11 @@
   function = "share"
   path = "/share"
 
+# 音源状态 API 代理：解决浏览器跨域拦截 + 第三方 CORS 代理普遍失效问题
+[[edge_functions]]
+  function = "source-status"
+  path = "/api/source-status"
+
 # 安全响应头
 [[headers]]
   for = "/*"

@@ -2880,18 +2880,23 @@ function fetchWithTimeout(url, timeoutMs) {
 function isValidStatusData(d) {
   return d && typeof d === 'object' && !!(d.kuwo || d.qq || d.kugou || d.netease);
 }
-// 多通道竞速：直连与多个 CORS 代理同时发起，谁先返回合法 JSON 就用谁（状态接口本身不带跨域头，直连通常会被浏览器拦截）
+// 多通道竞速：自建 Netlify Edge 代理（首选，同域无跨域问题）+ 直连 + 第三方 CORS 代理
+// 谁先返回合法 JSON 就用谁。自建代理挂了时自动回退到其他通道。
 function fetchSourceStatusRaw() {
   const enc = encodeURIComponent(SOURCE_STATUS_API);
   const channels = [
+    // 首选：同域 Edge Function 代理，自带 CORS 头，稳定可靠
+    { name: 'edge-proxy', url: '/api/source-status', timeout: 6000 },
+    // 直连：状态接口本身不带跨域头，浏览器通常会拦截，但保留作为兜底
     { name: 'direct',     url: SOURCE_STATUS_API, timeout: 4000 },
+    // 第三方 CORS 代理（可能间歇性不可用，作为最后兜底）
     { name: 'corssh',     url: 'https://proxy.cors.sh/' + SOURCE_STATUS_API, timeout: 8000 },
     { name: 'allorigins', url: 'https://api.allorigins.win/raw?url=' + enc, timeout: 8000 },
     { name: 'codetabs',   url: 'https://api.codetabs.com/v1/proxy/?quest=' + enc, timeout: 8000 }
   ];
   return new Promise((resolve, reject) => {
     let settled = false, remaining = channels.length;
-    const overall = setTimeout(() => { if (!settled) { settled = true; reject(new Error('检测超时')); } }, 9000);
+    const overall = setTimeout(() => { if (!settled) { settled = true; reject(new Error('检测超时')); } }, 10000);
     channels.forEach(ch => {
       fetchWithTimeout(ch.url, ch.timeout).then(text => {
         let d;
@@ -2973,14 +2978,25 @@ function renderSourceStatusData(data) {
   if (compactDots) compactDots.classList.remove('hidden');
 }
 function markSourceStatusFailed() {
+  const sources = ['kuwo','qq','kugou','netease'];
   const listEl = $('#sourceStatusList');
-  if (!listEl) return;
-  listEl.querySelectorAll('.source-status-item').forEach(item => {
-    const dot = item.querySelector('.source-status-dot');
-    const info = item.querySelector('.source-status-info');
-    if (dot) dot.className = 'source-status-dot checking';
-    if (info) { info.textContent = '检测失败，点刷新重试'; info.style.color = '#faad14'; }
+  const compactDots = $('#compactDots');
+  sources.forEach(src => {
+    if (listEl) {
+      const item = listEl.querySelector(`[data-source="${src}"]`);
+      if (item) {
+        const dot = item.querySelector('.source-status-dot');
+        const info = item.querySelector('.source-status-info');
+        if (dot) dot.className = 'source-status-dot offline';
+        if (info) { info.textContent = '检测失败，点刷新重试'; info.style.color = '#ff4d4f'; }
+      }
+    }
+    if (compactDots) {
+      const dot = compactDots.querySelector(`[data-src="${src}"]`);
+      if (dot) { dot.className = 'compact-dot offline'; dot.title = SOURCE_NAMES[src] + ' - 检测失败'; }
+    }
   });
+  if (compactDots) compactDots.classList.remove('hidden');
 }
 async function refreshAllSourceStatus(force) {
   // 有上次缓存先立即渲染（stale-while-revalidate），没有缓存才显示检测中

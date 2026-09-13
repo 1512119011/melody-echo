@@ -57,3 +57,37 @@ https://你的域名/share?name=Always Online&artist=林俊杰&pic=https://p1.mu
 3. **已有 netlify.toml**：如果你的项目已有 `netlify.toml`，把其中 `[[edge_functions]]` 和 `[build]` 部分合并进去即可，不要覆盖原有配置
 4. **Edge Functions 配额**：Netlify 免费版每月有 100 万次 Edge Function 调用，个人使用完全足够
 5. **降级逻辑**：原始音源失效后会自动尝试酷我 → 网易云 → QQ → 酷狗（排除原始曲库），找到可用音源即切换；全部失败则提示"所有音源均无法播放该歌曲"
+
+---
+
+## 2026-09-13 音源状态检测修复
+
+### 问题
+右上角「音源状态」面板四个音源（酷我/QQ/酷狗/网易云）全部卡在「检测中...」，永远不返回结果。
+
+### 原因
+- 音源状态接口 `https://music.xcloudv.top/api_check/api_doubtful.php` 本身不带 CORS 头，浏览器直连会被跨域拦截
+- 代码依赖 3 个第三方 CORS 代理（cors.sh / allorigins / codetabs）做中转，但这 3 个服务当前全部不可用
+- 所有检测通道同时失效 → 请求永远 pending → UI 停留在「检测中」
+- 附带 bug：`markSourceStatusFailed()` 失败时圆点错误地保持 `checking`（黄色脉冲），视觉上和「检测中」无法区分
+
+### 解决方案
+1. **新增自建 Edge Function 代理** `netlify/edge-functions/source-status.js`，路径 `/api/source-status`
+   - 服务端转发请求到上游状态接口，附加 `Access-Control-Allow-Origin: *` 头
+   - 同域请求，无跨域问题，不依赖任何第三方代理
+   - 边缘缓存 30 秒，降低上游压力
+   - 8 秒超时保护，失败返回 502 + 错误信息
+2. **修改检测通道优先级**：自建代理设为首选（6秒超时），直连和第三方代理作为兜底
+3. **修复失败状态样式**：检测失败时圆点变为红色（`offline`），文字显示「检测失败，点刷新重试」，紧凑按钮同步更新
+
+### 新增文件
+```
+netlify/edge-functions/source-status.js   # 音源状态 API 代理
+```
+
+### 修改文件
+- `index.html` — 检测通道增加自建代理并设为首选；修复失败状态样式
+- `netlify.toml` — 增加 `/api/source-status` 路由映射
+
+### 验证
+部署后打开页面，右上角音源状态应在 1-2 秒内显示各音源的「搜索✓/播放✓」状态，不再卡在「检测中」。
